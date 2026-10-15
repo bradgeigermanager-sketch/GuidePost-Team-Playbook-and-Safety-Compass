@@ -1,0 +1,74 @@
+name: GuidePost CI/CD & GitHub Pages Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  test-build-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 2. Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 3. Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn pydantic pyyaml markdown
+
+      - name: 4. Execute Unit Test Suites (Quality Gate)
+        run: |
+          python3 -m unittest discover -s . -p "test_*.py"
+
+      - name: 5. Run Database Deduplication Sweep
+        run: |
+          python3 deduplicate_ledger.py
+
+      - name: 6. Run RepoWiki AST Engine & Build Static Dashboards
+        run: |
+          python3 git_and_cron_wiki_sync-v2.py
+          python3 -c "from guidepost_app import build_static_dashboards; build_static_dashboards('public')"
+          python3 cross_domain_search_engine.py
+
+      - name: 7. Commit & Push Updated Documentation & Indexes Back to GitHub
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add wiki/ public/ cross_domain_knowledge_index.json openapi.json || true
+          git diff --staged --quiet || git commit -m "chmod/ci: auto-sync AST wiki, openapi schema & static dashboards [skip ci]"
+          git push origin main || true
+
+      - name: 8. Setup GitHub Pages
+        uses: actions/configure-pages@v4
+
+      - name: 9. Upload Artifact for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'public'
+
+      - name: 10. Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
